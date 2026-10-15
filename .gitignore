@@ -1,0 +1,26 @@
+# Entorno virtual de Python
+venv/
+env/
+ENV/
+
+# Archivos de caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Archivos de sesión y credenciales de Instaloader / Scrapy
+*.session
+*.session-*
+cookies/
+sessions/
+
+# Archivos de datos extraídos (para no subir bases de datos o JSONs personales a GitHub)
+*.json
+*.jsonl
+*.csv
+*.parquet
+
+# Archivos propios del sistema operativo macOS
+.DS_Store
+.AppleDouble
+.LSOverride
