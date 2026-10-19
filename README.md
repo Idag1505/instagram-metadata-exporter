@@ -200,5 +200,5 @@ Este proyecto se desarrolló con fines **académicos y de aprendizaje** sobre ex
 
 ## Autor
 
-Proyecto desarrollado por **TU NOMBRE** como práctica académica de web scraping.
-Curso: **NOMBRE DEL CURSO** · Institución: **NOMBRE DE LA INSTITUCIÓN**
+Proyecto desarrollado por **ISIS ALTAMIRANO** como práctica académica de web scraping.
+Curso: **ARQUITECTURA DE SOFTWARE** · Institución: **UNIVERSIDAD CENTRAL DEL ECUADOR**
