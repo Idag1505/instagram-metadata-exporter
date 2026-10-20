@@ -20,7 +20,6 @@ Proyecto académico en Python que obtiene metadatos públicos de un perfil de In
 |---|---|
 | `instagram_json.py` | **Flujo A.** Consulta Instagram y genera el JSON directamente (perfil + publicaciones). |
 | `convertidor_publicaciones.py` | **Flujo B.** Convierte respaldos `.json.xz` de Instaloader en un JSON. |
-| `diagnostico_seguidores.py` | Script de prueba para comprobar si Instagram devuelve las listas de seguidores y seguidos. |
 | `requirements.txt` | Dependencias del proyecto. |
 | `resultados/` | Muestra reducida de resultados de ejemplo. |
 | `.gitignore` | Evita subir sesiones, cookies y datos sensibles. |
