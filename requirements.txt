@@ -1,2 +1,5 @@
 instaloader
 browser-cookie3
+google-genai
+python-dotenv
+flask

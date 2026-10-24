@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block titulo %}Instagram Metadata + Big Five{% endblock %}</title>
+<style>
+  :root { --fondo:#f6f7f9; --tarjeta:#fff; --texto:#1c1e21; --suave:#6b7280; --borde:#e2e5ea;
+          --acento:#4f46e5; --ok:#15803d; --mal:#b91c1c; --aviso:#b45309; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fondo:#14161a; --tarjeta:#1d2026; --texto:#e8eaed; --suave:#9aa3af; --borde:#2d323b;
+            --acento:#818cf8; --ok:#4ade80; --mal:#f87171; --aviso:#fbbf24; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--fondo); color:var(--texto); line-height:1.5; }
+  header { padding:14px 24px; background:var(--tarjeta); border-bottom:1px solid var(--borde); display:flex; gap:20px; align-items:center; }
+  header h1 { font-size:1.15rem; margin:0; }
+  a { color:var(--acento); }
+  main { max-width:1100px; margin:24px auto; padding:0 16px; }
+  .tarjeta { background:var(--tarjeta); border:1px solid var(--borde); border-radius:12px; padding:18px 20px; margin-bottom:18px; }
+  .tarjeta h2 { margin-top:0; font-size:1.05rem; }
+  .aviso { border-radius:10px; padding:12px 16px; margin-bottom:16px; border:1px solid var(--borde); background:var(--tarjeta); }
+  .aviso.ok { border-color:var(--ok); } .aviso.error { border-color:var(--mal); } .aviso.aviso { border-color:var(--aviso); }
+  .advertencia { border-left:4px solid var(--aviso); padding:10px 14px; margin-bottom:18px; background:var(--tarjeta); border-radius:6px; font-size:.92rem; }
+  .ok-t { color:var(--ok); font-weight:600; } .mal-t { color:var(--mal); font-weight:600; }
+  label { display:block; font-size:.9rem; margin:10px 0 4px; color:var(--suave); }
+  input[type=text], input[type=number] { width:100%; padding:8px 10px; border:1px solid var(--borde); border-radius:8px; background:var(--fondo); color:var(--texto); }
+  .fila { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; align-items:end; }
+  .check label { display:flex; gap:8px; align-items:center; margin:0; color:var(--texto); }
+  button { padding:9px 18px; border:0; border-radius:8px; background:var(--acento); color:#fff; font-weight:600; cursor:pointer; margin-top:14px; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  progress { width:100%; height:14px; }
+  table { width:100%; border-collapse:collapse; font-size:.9rem; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--borde); vertical-align:top; }
+  .metricas { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:14px; }
+  .metrica { background:var(--fondo); border-radius:10px; padding:12px; }
+  .metrica b { display:block; font-size:1.4rem; }
+  .metrica span { color:var(--suave); font-size:.85rem; }
+  .pestanas { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
+  .pestanas button { margin:0; background:var(--tarjeta); color:var(--texto); border:1px solid var(--borde); }
+  .pestanas button.activa { background:var(--acento); color:#fff; border-color:var(--acento); }
+  .panel { display:none; } .panel.activo { display:block; }
+  .barra { background:var(--fondo); border-radius:6px; height:10px; min-width:80px; }
+  .barra i { display:block; height:100%; background:var(--acento); border-radius:6px; }
+  .galeria { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; }
+  .galeria img, .galeria video { width:100%; border-radius:8px; background:#000; }
+  .suave { color:var(--suave); font-size:.88rem; }
+  details { margin:8px 0; } summary { cursor:pointer; font-weight:600; }
+  code { background:var(--fondo); padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 Instagram Metadata + Big Five</h1>
+  <a href="{{ url_for('index') }}">Inicio</a>
+</header>
+<main>
+  {% if msg %}<div class="aviso {{ tipo }}">{{ msg }}</div>{% endif %}
+  <div class="advertencia">
+    <b>Uso académico y responsable.</b> Instagram restringe las cuentas que consultan de forma automatizada:
+    usa una cuenta alternativa, límites bajos y no repitas la extracción seguida. Si ves errores
+    <code>429</code> o <code>feedback_required</code>, detente y espera varios días. Los datos extraídos
+    incluyen contenido de terceros: no los publiques.
+  </div>
+  {% block contenido %}{% endblock %}
+</main>
+</body>
+</html>

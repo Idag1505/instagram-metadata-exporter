@@ -1,26 +1,45 @@
-# Entorno virtual de Python
-venv/
-env/
-ENV/
+# ---- Secretos ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
 
-# Archivos de caché de Python
+# ---- Datos de ejecución (contienen contenido de terceros) ----
+datos/
+.cache/
+
+# ---- Sesiones de Instagram ----
+# (por si alguien las dejara en la carpeta del proyecto por error;
+#  lo normal es que vivan en ~/.config/instagram-metadata-exporter/)
+playwright-*.json
+session-*
+*.session
+
+# ---- Legacy (tiene cuentas hardcodeadas, no debe subirse) ----
+legacy/
+
+# ---- Entornos virtuales ----
+venv/
+.venv/
+.venv*/
+env/
+
+# ---- Python ----
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Archivos de sesión y credenciales de Instaloader / Scrapy
-*.session
-*.session-*
-cookies/
-sessions/
-
-# Archivos de datos extraídos (para no subir bases de datos o JSONs personales a GitHub)
-*.json
-*.jsonl
-*.csv
-*.parquet
-
-# Archivos propios del sistema operativo macOS
+# ---- Sistema ----
 .DS_Store
-.AppleDouble
-.LSOverride
+Thumbs.db
+desktop.ini
+
+# ---- Editor ----
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,5 @@
+# Opcional: solo si quieres usar la interfaz alternativa app.py (Streamlit).
+# En algunos Mac con procesador Intel, pyarrow puede no instalarse; usa app_web.py.
+-r requirements.txt
+streamlit
+pandas

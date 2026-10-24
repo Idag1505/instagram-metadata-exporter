@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block contenido %}
+<section class="tarjeta">
+  <h2>Estado de la configuración</h2>
+  <p>Sesión de Instagram
+     {% if cuenta %}(<code>{{ cuenta }}</code>){% endif %}:
+     {% if sesion %}<span class="ok-t">guardada</span>{% else %}<span class="mal-t">no encontrada</span>{% endif %}</p>
+  <p>Clave de API en <code>.env</code>:
+     {% if api_ok %}<span class="ok-t">detectada</span>{% else %}<span class="mal-t">falta GEMINI_API_KEY</span>{% endif %}
+     · Modelo: <code>{{ modelo }}</code></p>
+  <p class="suave">La clave nunca se muestra ni se guarda en los resultados.</p>
+  <details>
+    <summary>Importar sesión desde Brave</summary>
+    <p class="suave">1) Inicia sesión en instagram.com con la cuenta alternativa en Brave.
+       2) <b>Cierra Brave por completo.</b> 3) Pulsa el botón.</p>
+    <form method="post" action="{{ url_for('importar') }}">
+      <label for="cuenta-imp">Cuenta alternativa</label>
+      <input type="text" id="cuenta-imp" name="cuenta" value="{{ cuenta }}" required>
+      <button type="submit">Importar sesión</button>
+    </form>
+  </details>
+</section>
+
+<section class="tarjeta">
+  <h2>1. Extraer datos</h2>
+  <form id="form-extraer">
+    <div class="fila">
+      <div><label for="usuario">Usuario de Instagram a consultar</label>
+           <input type="text" id="usuario" name="usuario" placeholder="nombre_de_usuario" required></div>
+      <div><label for="cuenta">Cuenta alternativa (sesión)</label>
+           <input type="text" id="cuenta" name="cuenta" value="{{ cuenta }}" required></div>
+      <div><label for="limite">Publicaciones (1-50)</label>
+           <input type="number" id="limite" name="limite" min="1" max="50" value="10"></div>
+      <div><label for="limite_comentarios">Comentarios por publicación</label>
+           <input type="number" id="limite_comentarios" name="limite_comentarios" min="1" max="100" value="20"></div>
+    </div>
+    <div class="fila check" style="margin-top:12px">
+      <label><input type="checkbox" name="fotos" checked> Descargar fotos</label>
+      <label><input type="checkbox" name="videos" checked> Descargar videos / reels</label>
+      <label><input type="checkbox" name="comentarios"> Obtener comentarios</label>
+    </div>
+    <p class="suave">Los comentarios y la multimedia requieren muchas más peticiones: más riesgo de bloqueo.
+       Empieza con pocas publicaciones.</p>
+    <button type="submit" id="boton">Extraer datos</button>
+  </form>
+  <div id="progreso" hidden style="margin-top:14px">
+    <progress id="barra" max="100" value="0"></progress>
+    <p id="mensaje" class="suave"></p>
+  </div>
+  <div id="error" class="aviso error" hidden style="margin-top:14px"></div>
+</section>
+
+{% if guardados %}
+<section class="tarjeta">
+  <h2>Datos guardados</h2>
+  <ul>{% for u in guardados %}<li><a href="{{ url_for('ver_usuario', usuario=u) }}">@{{ u }}</a></li>{% endfor %}</ul>
+</section>
+{% else %}
+<p class="suave">Aún no hay datos guardados. Extrae un perfil para empezar.</p>
+{% endif %}
+
+<script>
+const form = document.getElementById('form-extraer');
+const boton = document.getElementById('boton');
+const caja = document.getElementById('progreso');
+const barra = document.getElementById('barra');
+const mensaje = document.getElementById('mensaje');
+const errorCaja = document.getElementById('error');
+
+function mostrarError(texto) { errorCaja.textContent = texto; errorCaja.hidden = false; boton.disabled = false; caja.hidden = true; }
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  errorCaja.hidden = true; boton.disabled = true;
+  const r = await fetch("{{ url_for('extraer') }}", { method: 'POST', body: new FormData(form) });
+  const j = await r.json();
+  if (!j.ok) { mostrarError(j.error); return; }
+  caja.hidden = false;
+  sondear();
+});
+
+async function sondear() {
+  const s = await (await fetch("{{ url_for('estado') }}")).json();
+  barra.value = Math.round(s.fraccion * 100);
+  mensaje.textContent = s.mensaje;
+  if (s.terminado) {
+    if (s.error) { mostrarError(s.error); return; }
+    let destino = '/u/' + encodeURIComponent(s.usuario);
+    if (s.estado_final !== 'completo') {
+      destino += '?tipo=aviso&msg=' + encodeURIComponent('Extracción incompleta. ' + s.avisos.join(' '));
+    }
+    window.location = destino;
+    return;
+  }
+  setTimeout(sondear, 1500);
+}
+</script>
+{% endblock %}

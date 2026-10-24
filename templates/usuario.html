@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% macro numero(v) %}{{ '{:,}'.format(v) if v is not none else '—' }}{% endmacro %}
+
+{% block titulo %}@{{ usuario }} · Instagram Metadata{% endblock %}
+{% block contenido %}
+{% if datos.estado != 'completo' %}
+  <div class="aviso aviso">Estos datos corresponden a una extracción incompleta.</div>
+{% endif %}
+
+<div class="pestanas">
+  <button type="button" data-panel="datos" class="activa">📋 Perfil y métricas</button>
+  <button type="button" data-panel="multimedia">🖼️ Multimedia</button>
+  <button type="button" data-panel="comentarios">💬 Comentarios</button>
+  <button type="button" data-panel="bigfive">🧠 Big Five</button>
+</div>
+
+<!-- ============ PERFIL Y MÉTRICAS ============ -->
+<section id="datos" class="panel activo tarjeta">
+  <h2>@{{ perfil.usuario }} {% if perfil.es_verificado %}✔️{% endif %}</h2>
+  <div class="metricas">
+    <div class="metrica"><b>{{ numero(perfil.seguidores) }}</b><span>Seguidores</span></div>
+    <div class="metrica"><b>{{ numero(perfil.seguidos) }}</b><span>Seguidos</span></div>
+    <div class="metrica"><b>{{ numero(perfil.total_publicaciones) }}</b><span>Publicaciones (total)</span></div>
+    <div class="metrica"><b>{{ publicaciones|length }}</b><span>Extraídas</span></div>
+  </div>
+  <p><b>Nombre:</b> {{ perfil.nombre_completo or '—' }}</p>
+  <p><b>Biografía:</b><br>{{ perfil.biografia or '—' }}</p>
+  {% if perfil.url_externa %}<p><b>Enlace:</b> {{ perfil.url_externa }}</p>{% endif %}
+
+  {% if publicaciones %}
+  <h3>Interacciones por publicación</h3>
+  <div style="overflow-x:auto">
+  <table>
+    <tr><th>#</th><th>Fecha</th><th>Tipo</th><th>Likes</th><th>Comentarios</th><th>Interacciones</th><th>Vistas</th><th></th></tr>
+    {% for p in publicaciones %}
+    <tr>
+      <td>{{ p.numero_post }}</td>
+      <td>{{ (p.fecha_publicacion or '')[:10] }}</td>
+      <td>{{ p.tipo }}</td>
+      <td>{{ p.likes }}</td>
+      <td>{{ p.comentarios }}</td>
+      <td>{{ p.interacciones }}</td>
+      <td>{{ p.vistas_video if p.vistas_video is not none else '—' }}</td>
+      <td style="width:140px"><div class="barra"><i style="width: {{ (100 * p.interacciones / max_interacciones)|round|int }}%"></i></div></td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  <p class="suave">Likes = -1 significa que el autor oculta el número de «me gusta».</p>
+  {% endif %}
+
+  {% if datos.metricas %}
+  <details><summary>Métricas agregadas</summary>
+    <table>{% for clave, valor in datos.metricas.items() %}
+      <tr><td>{{ clave.replace('_', ' ') }}</td><td>{{ valor if valor is not none else '—' }}</td></tr>
+    {% endfor %}</table>
+  </details>
+  {% endif %}
+  {% if datos.avisos %}<details><summary>Avisos de la extracción</summary><ul>{% for a in datos.avisos %}<li>{{ a }}</li>{% endfor %}</ul></details>{% endif %}
+</section>
+
+<!-- ============ MULTIMEDIA ============ -->
+<section id="multimedia" class="panel tarjeta">
+  {% if not medios %}
+    <p class="suave">No hay archivos descargados. Activa «Descargar fotos» o «videos / reels» al extraer.</p>
+  {% endif %}
+  {% for m in medios %}
+    <h3>#{{ m.pub.numero_post }} · {{ m.pub.tipo }} · {{ (m.pub.fecha_publicacion or '')[:10] }}
+        <span class="suave">· ❤️ {{ m.pub.likes }} · 💬 {{ m.pub.comentarios }}</span></h3>
+    <div class="galeria">
+      {% for f in m.imagenes %}<img loading="lazy" src="{{ url_for('media', usuario=usuario, archivo=f) }}" alt="Publicación {{ m.pub.numero_post }}">{% endfor %}
+      {% for f in m.videos %}<video controls preload="metadata" src="{{ url_for('media', usuario=usuario, archivo=f) }}"></video>{% endfor %}
+    </div>
+    {% if m.pub.descripcion %}<p class="suave">{{ m.pub.descripcion[:300] }}</p>{% endif %}
+    <hr style="border:0;border-top:1px solid var(--borde)">
+  {% endfor %}
+</section>
+
+<!-- ============ COMENTARIOS ============ -->
+<section id="comentarios" class="panel tarjeta">
+  {% if not con_comentarios %}
+    <p class="suave">No se obtuvieron comentarios. Activa «Obtener comentarios» al extraer.</p>
+  {% else %}
+    <p class="suave">Los usuarios de quienes comentan se muestran seudonimizados y los textos anonimizados
+       (sin @menciones, enlaces, correos ni teléfonos).</p>
+  {% endif %}
+  {% for p in con_comentarios %}
+    <details>
+      <summary>Publicación #{{ p.numero_post }} — {{ p.comentarios_lista|length }} comentarios</summary>
+      <table>
+        <tr><th>Autor</th><th>Comentario</th><th>Fecha</th><th>Likes</th></tr>
+        {% for c in p.comentarios_lista %}
+        <tr><td>{{ c.autor }}</td><td>{{ c.texto }}</td><td>{{ (c.fecha or '')[:10] }}</td><td>{{ c.likes }}</td></tr>
+        {% endfor %}
+      </table>
+    </details>
+  {% endfor %}
+</section>
+
+<!-- ============ BIG FIVE ============ -->
+<section id="bigfive" class="panel tarjeta">
+  <p>Estimación <b>exploratoria</b> basada en las descripciones de las publicaciones y en métricas agregadas
+     de comportamiento. No usa los comentarios de otras personas ni hace nuevas peticiones a Instagram.
+     Los textos se envían <b>anonimizados</b> a la API.</p>
+  <form method="post" action="{{ url_for('analizar', usuario=usuario) }}">
+    <label style="display:flex;gap:8px;align-items:flex-start;color:var(--texto)">
+      <input type="checkbox" id="consentimiento" name="consentimiento">
+      <span>Confirmo que es mi propia cuenta o que tengo el consentimiento expreso de la persona
+            para analizar su contenido.</span>
+    </label>
+    {% if not api_ok %}<p class="mal-t">Falta GEMINI_API_KEY en el archivo .env</p>{% endif %}
+    <button type="submit" id="btn-analizar" disabled>Analizar Big Five</button>
+  </form>
+
+  {% if analisis %}
+    {% set res = analisis.resultado or {} %}
+    {% set rasgos_dict = res.get('rasgos') or {} %}
+    <hr style="border:0;border-top:1px solid var(--borde);margin:20px 0">
+    <p class="suave">{{ analisis.aviso }}</p>
+    <table>
+      {% for r in rasgos %}
+        {% set info = rasgos_dict.get(r) or {} %}
+        <tr>
+          <td style="width:230px"><b>{{ etiquetas[r] }}</b></td>
+          <td style="width:200px"><div class="barra"><i style="width: {{ ((info.get('puntuacion') or 0) * 20) }}%"></i></div></td>
+          <td>{{ info.get('puntuacion', '?') }}/5 · confianza {{ info.get('confianza', '?') }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+    {% for r in rasgos %}
+      {% set info = rasgos_dict.get(r) or {} %}
+      <details><summary>{{ etiquetas[r] }}</summary><p>{{ info.get('evidencia', '') }}</p></details>
+    {% endfor %}
+    <h3>Resumen</h3><p>{{ res.get('resumen', '—') }}</p>
+    <h3>Limitaciones</h3><p>{{ res.get('limitaciones', '—') }}</p>
+    <p class="suave">Modelo: {{ analisis.modelo }} · textos analizados: {{ analisis.get('publicaciones_analizadas', '?') }}</p>
+  {% endif %}
+</section>
+
+<script>
+const botones = document.querySelectorAll('.pestanas button');
+function mostrar(id) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('activo', p.id === id));
+  botones.forEach(b => b.classList.toggle('activa', b.dataset.panel === id));
+}
+botones.forEach(b => b.addEventListener('click', () => { history.replaceState(null, '', '#' + b.dataset.panel); mostrar(b.dataset.panel); }));
+const inicial = location.hash.replace('#', '');
+if (['datos', 'multimedia', 'comentarios', 'bigfive'].includes(inicial)) mostrar(inicial);
+
+const casilla = document.getElementById('consentimiento');
+const btn = document.getElementById('btn-analizar');
+if (casilla && btn) casilla.addEventListener('change', () => { btn.disabled = !casilla.checked; });
+</script>
+{% endblock %}
