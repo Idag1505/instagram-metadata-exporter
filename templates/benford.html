@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Benford · {{ usuario }}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border: 1px solid #ccc; padding: .35rem .6rem; text-align: right; }
+    th:first-child, td:first-child { text-align: center; }
+    .aviso { background: #fff3cd; padding: .6rem 1rem; border-radius: 6px; }
+    select { margin-right: 1rem; }
+  </style>
+</head>
+<body>
+  <a href="{{ url_for('ver_usuario', usuario=usuario) }}">← Volver</a>
+  <h1>Ley de Benford · @{{ usuario }}</h1>
+
+  <form method="get">
+    Lista:
+    <select name="lista" onchange="this.form.submit()">
+      {% for k, v in listas.items() %}
+        <option value="{{ k }}" {{ 'selected' if k == lista }}>{{ v }}</option>
+      {% endfor %}
+    </select>
+    Primer dígito de:
+    <select name="metrica" onchange="this.form.submit()">
+      {% for k, v in metricas.items() %}
+        <option value="{{ k }}" {{ 'selected' if k == metrica }}>{{ v }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  <p><a href="{{ url_for('benford_excel', usuario=usuario, lista=lista, metrica=metrica) }}">⬇️ Descargar Excel</a></p>
+
+  {% if not analisis.n %}
+    <p class="aviso">No hay datos para esta combinación. Extrae la lista con «estadísticas de cada usuario» activado.</p>
+  {% else %}
+    <img src="{{ url_for('benford_png', usuario=usuario, lista=lista, metrica=metrica) }}"
+         alt="Curva de Benford vs observada" style="width:100%">
+         {% set v = analisis.veredicto %}
+         <div class="aviso">
+           <b>{{ v.titulo }}</b>
+           <ul>{% for nota in v.notas %}<li>{{ nota }}</li>{% endfor %}</ul>
+         </div>
+    <h2>Chi cuadrado</h2>
+    <p>
+      n = {{ analisis.n }} · χ² = <strong>{{ analisis.chi_cuadrado }}</strong> ({{ analisis.gl }} gl,
+      crítico 5 % = {{ analisis.valor_critico_5pct }}) · p = <strong>{{ analisis.p_valor }}</strong><br>
+      {% if analisis.rechaza_benford %}
+        Se <strong>rechaza</strong> que la distribución siga Benford (p &lt; 0,05).
+      {% else %}
+        <strong>No se rechaza</strong> que siga Benford (p ≥ 0,05).
+      {% endif %}
+      · MAD = {{ analisis.mad }} ({{ analisis.conformidad_mad }})
+    </p>
+    {% if analisis.advertencia %}<p class="aviso">{{ analisis.advertencia }}</p>{% endif %}
+
+    <table>
+      <tr><th>Dígito</th><th>Observado (n)</th><th>Observado</th><th>Esperado (n)</th><th>Esperado</th><th>Aporte al χ²</th></tr>
+      {% for f in analisis.filas %}
+      <tr>
+        <td>{{ f.digito }}</td><td>{{ f.observado_n }}</td><td>{{ '%.1f'|format(f.observado*100) }} %</td>
+        <td>{{ f.esperado_n }}</td><td>{{ '%.1f'|format(f.esperado*100) }} %</td><td>{{ f.contribucion_chi2 }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+</body>
+</html>
