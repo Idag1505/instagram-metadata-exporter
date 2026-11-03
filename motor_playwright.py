@@ -1,3 +1,4 @@
+
 import json
 import os
 import random
@@ -11,7 +12,7 @@ from urllib.parse import urlparse
 import nucleo as n
 
 INSTAGRAM = "https://www.instagram.com"
-DOMINIOS_CDN = (".cdninstagram.com", ".fbcdn.net")  # solo se descargan archivos de aquí
+DOMINIOS_CDN = (".cdninstagram.com", ".fbcdn.net")
 
 PATRON_META = re.compile(
     r"([\d.,]+\s*[KMBkmb]?)\s*(?:Followers|seguidores)\D+?"
@@ -73,7 +74,7 @@ def importar_sesion_brave(cuenta: str) -> str:
     ruta.parent.mkdir(parents=True, exist_ok=True)
     ruta.write_text(json.dumps(estado), encoding="utf-8")
     try:
-        os.chmod(ruta, 0o600)  # solo tu usuario puede leerla
+        os.chmod(ruta, 0o600)
     except OSError:
         pass
     return cuenta
@@ -91,6 +92,37 @@ def recorrer(obj):
         elif isinstance(actual, list):
             pila.extend(actual)
 
+_JS_TARJETA = """(usuario) => {
+    const dialogo = document.querySelector("div[role='dialog']");
+    const u = usuario.toLowerCase();
+    const candidatos = Array.from(document.querySelectorAll("div, section")).filter(el => {
+        if (dialogo && el.contains(dialogo)) return false;
+        const t = (el.innerText || "").trim();
+        if (t.length < 15 || t.length > 450) return false;
+        const bajo = t.toLowerCase();
+        return bajo.includes(u)
+            && /(seguidores|followers)/.test(bajo)
+            && /(seguidos|following)/.test(bajo);
+    });
+    candidatos.sort((a, b) => a.innerText.length - b.innerText.length);
+    return candidatos.length ? candidatos[0].innerText : "";
+}"""
+
+_NUM = r"(\d[\d.,]*\s*(?:millones|mill\.?|mil|[kKmMbB])?)"
+
+
+def _cifra_antes_de(texto: str, etiquetas: str) -> Optional[str]:
+    m = re.search(_NUM + r"\s*(?:" + etiquetas + r")\b", texto, re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def _cifra_a_entero(token: str) -> Optional[int]:
+    """'12 mil' -> 12000, '1,2 M' -> 1200000, '1.234' -> 1234."""
+    t = token.lower().replace(" ", "")
+    t = re.sub(r"millones|mill\.?", "m", t)
+    t = t.replace("mil", "k")
+    return convertir_cifra(t)
+
 
 def _conteo(d: dict, *claves: str) -> Optional[int]:
     for clave in claves:
@@ -101,6 +133,11 @@ def _conteo(d: dict, *claves: str) -> Optional[int]:
             return valor
     return None
 
+def _tiene_dato(u: dict) -> bool:
+    return any(
+        u.get(k) is not None
+        for k in ("seguidores", "seguidos", "digito_seguidores", "digito_seguidos")
+    )
 
 def convertir_cifra(texto) -> Optional[int]:
     """'960' -> 960, '1,234' -> 1234, '12.5K' -> 12500, '1,2 M' -> 1200000."""
@@ -135,10 +172,6 @@ def parsear_perfil(payloads: list, meta_descripcion: Optional[str], usuario: str
                 if candidato is None or len(d) > len(candidato):
                     candidato = d
 
-    # Inicialización FUERA del bucle: si payloads está vacío, `candidato` sigue
-    # siendo None pero `perfil` existe con valores por defecto. Sin esto, la
-    # primera llamada desde extraer() (parsear_perfil([], None, usuario))
-    # lanza UnboundLocalError.
     perfil = {
         "usuario": usuario,
         "nombre_completo": "",
@@ -168,7 +201,6 @@ def parsear_perfil(payloads: list, meta_descripcion: Optional[str], usuario: str
             ) or None,
         })
 
-    # Respaldo: la etiqueta <meta> de la página trae los tres conteos
     if meta_descripcion:
         m = PATRON_META.search(meta_descripcion)
         if m:
@@ -181,26 +213,14 @@ def parsear_perfil(payloads: list, meta_descripcion: Optional[str], usuario: str
 
 def _es_nodo_post(d: dict) -> bool:
     """
-    Un post REAL del timeline SIEMPRE tiene `taken_at` (Unix timestamp).
+    Un post REAL del timeline SIEMPRE tiene fecha (`taken_at`).
     Los hijos de carrusel tienen `code` + `image_versions2` pero NO fecha.
-
-    Filtro:
-      1. Debe tener shortcode/code.
-      2. Debe tener `taken_at_timestamp` o `taken_at` (o, en formatos legacy,
-         `edge_media_to_caption` no vacío).
+    Los ads sí tienen fecha → se filtran después por propietario.
     """
     tiene_codigo = isinstance(d.get("shortcode"), str) or isinstance(d.get("code"), str)
     if not tiene_codigo:
         return False
-
-    if d.get("taken_at_timestamp") is not None or d.get("taken_at") is not None:
-        return True
-
-    caption_edges = (d.get("edge_media_to_caption") or {}).get("edges")
-    if isinstance(caption_edges, list) and caption_edges:
-        return True
-
-    return False
+    return d.get("taken_at_timestamp") is not None or d.get("taken_at") is not None
 
 
 def _descripcion(d: dict) -> str:
@@ -229,11 +249,7 @@ def _url_video(d: dict) -> Optional[str]:
 
 def _propietario_post(d: dict) -> tuple:
     """
-    Devuelve (username_del_dueño, id_numerico_del_dueño) de un nodo de post.
-    Instagram usa varios formatos según la versión:
-      - {"owner": {"username": "...", "id": "..."}}    (GraphQL moderno)
-      - {"user":  {"username": "...", "pk": "..."}}    (API v1)
-      - {"id": "<media_id>_<user_id>"}                 (formato legacy)
+    Devuelve (username_del_dueño, id_numerico_del_dueño).
     """
     for clave in ("owner", "user"):
         obj = d.get(clave)
@@ -243,7 +259,6 @@ def _propietario_post(d: dict) -> tuple:
             if username or idnum:
                 return (username, str(idnum) if idnum else None)
 
-    # Fallback: parsear el sufijo de "id" con formato "<media>_<user>"
     media_id = d.get("id") or d.get("pk")
     if isinstance(media_id, str) and "_" in media_id:
         partes = media_id.rsplit("_", 1)
@@ -254,7 +269,7 @@ def _propietario_post(d: dict) -> tuple:
 
 
 def normalizar_nodo(d: dict) -> dict:
-    """Convierte un nodo de publicación (formato antiguo o nuevo) al formato interno del proyecto."""
+    """Convierte un nodo de publicación al formato interno del proyecto."""
     shortcode = d.get("shortcode") if isinstance(d.get("shortcode"), str) else d.get("code")
     descripcion = _descripcion(d)
 
@@ -317,11 +332,6 @@ def normalizar_nodo(d: dict) -> dict:
 
 
 def parsear_publicaciones(payloads: list, usuario=None, usuario_id=None) -> list[dict]:
-    """
-    Extrae posts del timeline del perfil, descartando:
-      - hijos de carrusel (sin `taken_at`)
-      - posts sugeridos / ads (con `taken_at` pero de OTRO dueño)
-    """
     resultado = {}
     descartados_ajenos = 0
 
@@ -365,7 +375,7 @@ def parsear_comentarios(payloads: list, descripcion: str = "", autor: str = "") 
             if not (nombre and isinstance(texto, str) and ("created_at" in d or "created_at_utc" in d)):
                 continue
             if texto == descripcion and nombre.lower() == autor.lower():
-                continue  # es la descripción de la publicación, no un comentario
+                continue
             clave = d.get("pk") or d.get("id") or (nombre, texto)
             if clave in vistos:
                 continue
@@ -383,20 +393,22 @@ def parsear_comentarios(payloads: list, descripcion: str = "", autor: str = "") 
 class SitioPlaywright:
     """Operaciones sobre Instagram con un navegador real controlado por Playwright."""
 
+    IG_APP_ID = "936619743392459"
+
     def __init__(self, contexto):
+        self.avisos_red = []
         self.contexto = contexto
         self.pagina = contexto.new_page()
         self._respuestas = []
         self.pagina.on("response", self._registrar)
 
-    # -- captura de respuestas JSON --
     def _registrar(self, respuesta):
         try:
             if respuesta.request.resource_type in ("xhr", "fetch") and (
                 "graphql" in respuesta.url or "/api/v1/" in respuesta.url
             ):
                 self._respuestas.append(respuesta)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     def _vaciar(self) -> list:
@@ -405,17 +417,16 @@ class SitioPlaywright:
         for respuesta in pendientes:
             try:
                 payloads.append(respuesta.json())
-            except Exception:  # noqa: BLE001 - cuerpo no disponible o no es JSON
+            except Exception:
                 continue
         return payloads
 
     def _scripts_json(self) -> list:
-        """Instagram incrusta datos precargados en etiquetas <script type="application/json">."""
         try:
             textos = self.pagina.eval_on_selector_all(
                 'script[type="application/json"]', "els => els.map(e => e.textContent)"
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             return []
         resultado = []
         for texto in textos:
@@ -431,46 +442,42 @@ class SitioPlaywright:
             return self.pagina.eval_on_selector_all(
                 'a[href*="/p/"], a[href*="/reel/"]', "els => els.map(e => e.getAttribute('href'))"
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             return []
 
-    # -- comprobaciones --
     def _verificar_pagina(self, respuesta) -> None:
         url = self.pagina.url
         if "accounts/login" in url:
             raise RuntimeError(
-                "Instagram redirigió al inicio de sesión: la sesión expiró o no es válida. "
-                "Vuelve a importarla desde Brave."
+                "Instagram redirigió al inicio de sesión: la sesión expiró o no es válida."
             )
         if any(palabra in url for palabra in ("challenge", "checkpoint", "suspended")):
             raise RuntimeError(
-                "Instagram pide una verificación de seguridad. Resuélvela tú mismo en Brave "
-                "y espera varios días antes de volver a extraer."
+                "Instagram pide una verificación de seguridad. Resuélvela en Brave."
             )
         estado = getattr(respuesta, "status", None)
         if estado == 404:
             raise RuntimeError("El perfil no existe.")
         if estado == 429:
-            raise RuntimeError("Instagram respondió 429 (demasiadas peticiones). Espera al menos un día.")
+            raise RuntimeError("Instagram respondió 429 (demasiadas peticiones). Espera.")
         try:
             inicio = self.pagina.inner_text("body")[:2000].lower()
-        except Exception:  # noqa: BLE001
+        except Exception:
             inicio = ""
         if "esta página no está disponible" in inicio or "isn't available" in inicio:
-            raise RuntimeError("El perfil no existe o no está disponible para esta cuenta.")
+            raise RuntimeError("El perfil no existe o no está disponible.")
 
-    # -- interfaz usada por extraer() --
     def abrir_perfil(self, usuario: str) -> dict:
         try:
             respuesta = self.pagina.goto(f"{INSTAGRAM}/{usuario}/", wait_until="domcontentloaded", timeout=45_000)
             self.pagina.wait_for_timeout(random.uniform(2500, 4500))
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             raise RuntimeError(f"No se pudo abrir el perfil: {error}")
         self._verificar_pagina(respuesta)
 
         try:
             meta = self.pagina.eval_on_selector('meta[property="og:description"]', "e => e.content")
-        except Exception:  # noqa: BLE001
+        except Exception:
             meta = None
         return {"payloads": self._scripts_json() + self._vaciar(), "meta": meta, "enlaces": self._enlaces()}
 
@@ -478,20 +485,20 @@ class SitioPlaywright:
         try:
             self.pagina.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             self.pagina.wait_for_timeout(random.uniform(2500, 4500))
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             raise RuntimeError(f"No se pudo desplazar la página: {error}")
         return {"payloads": self._vaciar(), "enlaces": self._enlaces()}
 
     def descargar(self, url: str, destino: Path) -> bool:
         host = urlparse(url).hostname or ""
         if not host.endswith(DOMINIOS_CDN):
-            return False  # nunca se descarga desde dominios que no sean de Instagram
+            return False
         try:
             respuesta = self.contexto.request.get(url, timeout=60_000)
             if not respuesta.ok:
                 return False
             destino.write_bytes(respuesta.body())
-        except Exception:  # noqa: BLE001 - un archivo que falla no debe detener la extracción
+        except Exception:
             return False
         return True
 
@@ -500,21 +507,334 @@ class SitioPlaywright:
         try:
             self.pagina.goto(f"{INSTAGRAM}/p/{shortcode}/", wait_until="domcontentloaded", timeout=45_000)
             self.pagina.wait_for_timeout(random.uniform(3000, 5000))
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             raise RuntimeError(f"No se pudo abrir la publicación: {error}")
         self._verificar_pagina(None)
         payloads = self._scripts_json() + self._vaciar()
         return parsear_comentarios(payloads, descripcion, autor)[:limite]
 
+    def obtener_perfil_api(self, usuario: str) -> dict:
+        """Obtiene los datos reales del perfil usando la API interna."""
+        cookies = self.contexto.cookies()
+        csrf = next((c["value"] for c in cookies if c["name"] == "csrftoken"), "")
+        try:
+            r = self.contexto.request.get(
+                f"https://www.instagram.com/api/v1/users/web_profile_info/?username={usuario}",
+                headers={
+                    "x-ig-app-id": self.IG_APP_ID,
+                    "x-csrftoken": csrf,
+                    "Referer": f"https://www.instagram.com/{usuario}/",
+                },
+                timeout=20_000,
+            )
+            if r.ok:
+                return (r.json().get("data") or {}).get("user") or {}
+        except Exception:
+            pass
+        return {}
+
     def pausa(self, minimo: float, maximo: float) -> None:
         self.pagina.wait_for_timeout(random.uniform(minimo, maximo) * 1000)
 
+    # ---------------------- Seguidores / seguidos ----------------------
+    def _registrar_aviso(self, mensaje: str) -> None:
+        self.avisos_red.append(mensaje)
+        print(f"[red] {mensaje}", flush=True)
+
+    def _get_json(self, url: str, reintentos: int = 3) -> Optional[dict]:
+        """GET con reintentos. Con reintentos=1 no espera: falla rápido."""
+        for intento in range(reintentos):
+            csrf = next((c["value"] for c in self.contexto.cookies() if c["name"] == "csrftoken"), "")
+            try:
+                r = self.contexto.request.get(
+                    url,
+                    headers={"x-ig-app-id": self.IG_APP_ID, "x-csrftoken": csrf, "Referer": f"{INSTAGRAM}/"},
+                    timeout=20_000,
+                )
+            except Exception as error:
+                self._registrar_aviso(f"Error de red en {url.split('?')[0]}: {error}")
+                continue
+            if r.ok:
+                try:
+                    return r.json()
+                except Exception:
+                    return None
+            if r.status == 429:
+                self._registrar_aviso(f"HTTP 429 en {url.split('?')[0]} (intento {intento + 1}/{reintentos})")
+                if intento < reintentos - 1:
+                    self.pagina.wait_for_timeout(60_000 * (intento + 1))
+                continue
+            self._registrar_aviso(f"HTTP {r.status} en {url.split('?')[0]}")
+            return None
+        return None
+
+    def stats_usuario(self, user_id: str) -> dict:
+        """Seguidores y seguidos de un usuario (API interna). Falla rápido, sin esperas largas."""
+        if not user_id:
+            return {"seguidores": None, "seguidos": None}
+        data = self._get_json(f"{INSTAGRAM}/api/v1/users/{user_id}/info/", reintentos=1)
+        user = (data or {}).get("user") or {}
+        return {"seguidores": user.get("follower_count"), "seguidos": user.get("following_count")}
+
+    def _leer_tarjeta(self, nombre: str) -> Optional[dict]:
+        """Busca en las respuestas capturadas tras el hover los datos del usuario."""
+        for payload in self._vaciar():
+            for d in recorrer(payload):
+                if str(d.get("username", "")).lower() != nombre:
+                    continue
+                seg = _conteo(d, "follower_count", "edge_followed_by")
+                sig = _conteo(d, "following_count", "edge_follow")
+                if seg is not None or sig is not None:
+                    return {"seguidores": seg, "seguidos": sig}
+        return None
+
+    def _descartar_popups(self) -> None:
+        for texto in ("Ahora no", "Not Now", "Aceptar todo", "Permitir todas las cookies",
+                      "Decline optional cookies", "Rechazar cookies opcionales"):
+            try:
+                boton = self.pagina.get_by_role("button", name=texto).first
+                if boton.is_visible(timeout=800):
+                    boton.click()
+                    self.pagina.wait_for_timeout(500)
+            except Exception:
+                pass
+
+    def _captura_depuracion(self, nombre: str) -> None:
+        if os.environ.get("DEBUG") != "1":
+            return
+        try:
+            n.CARPETA_DATOS.mkdir(parents=True, exist_ok=True)
+            ruta = n.CARPETA_DATOS / f"debug_{nombre}.png"
+            self.pagina.screenshot(path=str(ruta))
+            self._registrar_aviso(f"Captura de depuración guardada en {ruta}")
+        except Exception:
+            pass
+
+    def _leer_tarjeta_dom(self, nombre: str, intentos: int = 5) -> Optional[dict]:
+        """Lee el texto de la tarjeta emergente (no depende del formato de red)."""
+        for _ in range(intentos):
+            self.pagina.wait_for_timeout(400)
+            try:
+                texto = self.pagina.evaluate(_JS_TARJETA, nombre)
+            except Exception:
+                texto = ""
+            if not texto:
+                continue
+            seg = _cifra_antes_de(texto, "seguidores|followers")
+            sig = _cifra_antes_de(texto, "seguidos|following")
+            pub = _cifra_antes_de(texto, "publicaciones|posts")
+            datos = {
+                "seguidores": _cifra_a_entero(seg) if seg else None,
+                "seguidos": _cifra_a_entero(sig) if sig else None,
+                "publicaciones": _cifra_a_entero(pub) if pub else None,
+            }
+            if datos["seguidores"] is not None or datos["seguidos"] is not None:
+                return datos
+        return None
+
+    def stats_por_hover(self, perfil: str, tipo: str, usuarios: list,
+                        vacias_max: int = 3, al_avanzar=None) -> dict:
+        """Abre el modal, pone el cursor sobre cada usuario y lee su tarjeta.
+        Prueba primero el enlace con texto y luego el del avatar. Devuelve {usuario: {...}}."""
+        pendientes = {u["usuario"].lower(): u["usuario"] for u in usuarios if u.get("usuario")}
+        total, procesados, leidos = len(pendientes), 0, {}
+        try:
+            self.pagina.goto(f"{INSTAGRAM}/{perfil}/", wait_until="domcontentloaded", timeout=45_000)
+            self.pagina.wait_for_timeout(random.uniform(2500, 4000))
+            self._descartar_popups()
+            enlace = self.pagina.locator(f'a[href*="/{tipo}/"]')
+            if enlace.count() == 0:
+                patron = r"seguidores|followers" if tipo == "followers" else r"seguidos|following"
+                enlace = self.pagina.get_by_role("link", name=re.compile(patron, re.I))
+            enlace = enlace.first
+            enlace.wait_for(state="visible", timeout=15_000)
+            enlace.click(timeout=10_000)
+            dialogo = self.pagina.locator('div[role="dialog"]').first
+            dialogo.wait_for(timeout=15_000)
+            self.pagina.wait_for_timeout(1500)
+        except Exception as error:
+            self._registrar_aviso(f"No se pudo abrir el modal de {tipo}: {error}")
+            self._captura_depuracion(f"modal_{tipo}")
+            return leidos
+
+        vacias, rondas = 0, 0
+        while pendientes and vacias < vacias_max and rondas < 300:
+            rondas += 1
+            enlaces = dialogo.locator('a[href^="/"]')
+            try:
+                filas = enlaces.evaluate_all(
+                    "els => els.map(e => [e.getAttribute('href'), (e.innerText || '').trim()])"
+                )
+            except Exception:
+                break
+
+            por_usuario = {}
+            for i, (href, texto) in enumerate(filas):
+                nombre = (href or "").strip("/").lower()
+                if nombre in pendientes and "/" not in nombre:
+                    por_usuario.setdefault(nombre, []).append((0 if texto else 1, i))
+
+            hubo_hover = False
+            for nombre, opciones in por_usuario.items():
+                original = pendientes.pop(nombre)            # se intenta una sola vez
+                procesados += 1
+                if al_avanzar and procesados % 5 == 0:
+                    al_avanzar(f"Cursor sobre {tipo}: {procesados}/{total}")
+                datos = None
+                for _, i in sorted(opciones):                # primero el enlace con texto, luego el avatar
+                    self._vaciar()
+                    try:
+                        objetivo = enlaces.nth(i)
+                        objetivo.scroll_into_view_if_needed(timeout=3_000)
+                        caja = objetivo.bounding_box()
+                        if caja:
+                            self.pagina.mouse.move(caja["x"] + caja["width"] / 2,
+                                                   caja["y"] + caja["height"] / 2, steps=10)
+                        objetivo.hover(timeout=5_000)
+                    except Exception:
+                        continue
+                    hubo_hover = True
+                    datos = self._leer_tarjeta_dom(nombre) or self._leer_tarjeta(nombre)
+                    self.pagina.mouse.move(0, 0)             # cierra la tarjeta
+                    if datos:
+                        break
+                if datos:
+                    leidos[original] = datos
+                self.pagina.wait_for_timeout(random.uniform(500, 1200))
+
+            vacias = 0 if hubo_hover else vacias + 1
+            try:
+                enlaces.last.scroll_into_view_if_needed(timeout=5_000)
+                self.pagina.wait_for_timeout(random.uniform(1500, 2500))
+            except Exception:
+                break
+        return leidos
+
+    def _consultar_cifras(self, encontrados: list, tipo: str, perfil: str,
+                          limite_stats: int, metodo: str,
+                          previos: Optional[dict] = None, al_avanzar=None) -> None:
+        """Rellena followers/following de cada usuario de la lista, por tandas."""
+        previos = previos or {}
+        for u in encontrados:                       # reutiliza lo consultado en tandas anteriores
+            p = previos.get(u["id_usuario"])
+            if p:
+                for clave in ("seguidores", "seguidos", "digito_seguidores", "digito_seguidos"):
+                    u[clave] = p.get(clave)
+
+        pendientes = [u for u in encontrados if not _tiene_dato(u)]
+        muestra = pendientes
+        if limite_stats and limite_stats < len(pendientes):
+            muestra = random.sample(pendientes, limite_stats)
+
+        leidos = (
+            self.stats_por_hover(perfil, tipo, muestra, al_avanzar=al_avanzar)
+            if metodo == "hover" and muestra else {}
+        )
+        fallos = 0
+        for i, u in enumerate(muestra, start=1):
+            if al_avanzar and i % 5 == 0:
+                al_avanzar(f"Consultando cifras de {tipo}: {i}/{len(muestra)}")
+            s = leidos.get(u["usuario"])
+            if not s:
+                if fallos >= 5:
+                    continue  # Instagram está limitando: no insistir
+                s = self.stats_usuario(u["id_usuario"])
+                if s["seguidores"] is None and s["seguidos"] is None:
+                    fallos += 1
+                    if fallos == 5:
+                        self._registrar_aviso(
+                            "5 consultas seguidas sin datos: se detienen las consultas por usuario "
+                            "(probable límite de Instagram)."
+                        )
+                else:
+                    fallos = 0
+                self.pausa(6, 12)
+            u["seguidores"] = s.get("seguidores")
+            u["seguidos"] = s.get("seguidos")
+            u["digito_seguidores"] = n.primer_digito(u["seguidores"])
+            u["digito_seguidos"] = n.primer_digito(u["seguidos"])
+
+        con_datos = sum(1 for u in encontrados if _tiene_dato(u))
+        self._registrar_aviso(
+            f"{tipo}: {con_datos} de {len(encontrados)} usuarios con datos acumulados. "
+            + ("Repite la extracción otro día para completar el resto."
+               if con_datos < len(encontrados) else "Lista completa.")
+        )
+   
+    def seguidores(
+        self,
+        usuario_id: str,
+        limite: int,
+        tipo: str,                      # "followers" | "following"
+        con_stats: bool = False,
+        limite_stats: int = 0,          # 0 = todos; si es menor, muestra aleatoria
+        metodo: str = "api",            # "api" | "hover"
+        perfil: str = "",
+        al_avanzar=None,
+        previos: Optional[dict] = None,
+    ) -> list[dict]:
+        if not usuario_id:
+            self._registrar_aviso("No se conoce el id del perfil: no se puede leer la lista.")
+            return []
+
+        encontrados, vistos, next_max_id = [], set(), None
+        paginas = 0
+        while not limite or len(encontrados) < limite:
+            paginas += 1
+            if paginas > 400:
+                self._registrar_aviso(f"Se alcanzó el máximo de páginas en '{tipo}'.")
+                break
+            url = f"{INSTAGRAM}/api/v1/friendships/{usuario_id}/{tipo}/?count=50"
+            if next_max_id:
+                url += f"&max_id={next_max_id}"
+            data = self._get_json(url)
+            if data is None:
+                self._registrar_aviso(f"La lista '{tipo}' se cortó con {len(encontrados)} usuarios.")
+                break
+            usuarios = data.get("users", [])
+            nuevos = 0
+            for u in usuarios:
+                id_u = str(u.get("pk") or u.get("id"))
+                if id_u in vistos:
+                    continue
+                vistos.add(id_u)
+                nuevos += 1
+                encontrados.append({
+                    "usuario": u.get("username"),
+                    "nombre_completo": u.get("full_name") or "",
+                    "es_verificado": bool(u.get("is_verified")),
+                    "es_privado": bool(u.get("is_private")),
+                    "id_usuario": id_u,
+                    "digito_seguidores": None,
+                    "digito_seguidos": None,
+                })
+                if limite and len(encontrados) >= limite:
+                    break
+            anterior = next_max_id
+            next_max_id = data.get("next_max_id")
+            if al_avanzar:
+                al_avanzar(f"Leyendo {tipo}: {len(encontrados)} usuarios...")
+            if not usuarios or not next_max_id or next_max_id == anterior or nuevos == 0:
+                break
+            self.pausa(2, 4)
+
+        if con_stats and encontrados:
+            try:
+                self._consultar_cifras(
+                    encontrados, tipo, perfil, limite_stats, metodo, previos, al_avanzar
+                )
+            except Exception as error:  # noqa: BLE001
+                self._registrar_aviso(
+                    f"Falló la consulta de cifras de {tipo}: {error}. Se conserva la lista."
+                )
+
+        return encontrados
 
 # ----------------------------------- Extracción -----------------------------------
 def _nombre_base(pub: dict) -> str:
     if pub.get("fecha_publicacion"):
-        fecha = datetime.fromisoformat(pub["fecha_publicacion"]).astimezone(timezone.utc)
-        return fecha.strftime("%Y-%m-%d_%H-%M-%S_UTC")
+        fecha = datetime.fromisoformat(pub["fecha_publicacion"].replace("Z", "+00:00"))
+        return fecha.astimezone(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S_UTC")
     return f"post_{pub['shortcode']}"
 
 
@@ -534,7 +854,7 @@ def _descargar_medios(sitio, pub: dict, medios: list, opciones, carpeta: Path, a
 
 
 def _publicaciones_desde_enlaces(enlaces: list) -> list[dict]:
-    """Último recurso: solo se conocen las URL de las publicaciones, sin métricas."""
+    """Último recurso: solo URL, sin métricas."""
     resultado, vistos = [], set()
     for enlace in enlaces or []:
         m = re.search(r"/(p|reel)/([\w-]+)", enlace or "")
@@ -573,6 +893,17 @@ def extraer(sitio, usuario: str, opciones: n.Opciones, carpeta: Path, progreso) 
         progreso(0.02, "Abriendo el perfil...")
         captura = sitio.abrir_perfil(usuario)
         datos["perfil"] = parsear_perfil(captura["payloads"], captura.get("meta"), usuario)
+
+        if datos["perfil"]["seguidores"] is None or not datos["perfil"].get("id_usuario"):
+            api_perfil = sitio.obtener_perfil_api(usuario)
+            if api_perfil:
+                datos["perfil"]["id_usuario"] = str(api_perfil.get("id") or api_perfil.get("pk") or "")
+                datos["perfil"]["seguidores"] = (api_perfil.get("edge_followed_by") or {}).get("count")
+                datos["perfil"]["seguidos"] = (api_perfil.get("edge_follow") or {}).get("count")
+                datos["perfil"]["total_publicaciones"] = (api_perfil.get("edge_owner_to_timeline_media") or {}).get("count")
+                datos["perfil"]["nombre_completo"] = api_perfil.get("full_name") or datos["perfil"]["nombre_completo"]
+                datos["perfil"]["biografia"] = api_perfil.get("biography") or datos["perfil"]["biografia"]
+
         if datos["perfil"]["seguidores"] is None:
             datos["avisos"].append("No se pudo leer el número de seguidores ni de seguidos.")
 
@@ -585,11 +916,67 @@ def extraer(sitio, usuario: str, opciones: n.Opciones, carpeta: Path, progreso) 
         }
         enlaces = list(captura.get("enlaces", []))
 
-        # Desplazamiento para cargar más publicaciones
+        # --- Seguidores / seguidos ---
+        redes = {}
+        if opciones.seguidores or opciones.seguidos:
+            for activo, clave, tipo, texto, fraccion in (
+                (opciones.seguidores, "seguidores", "followers", "seguidores", 0.08),
+                (opciones.seguidos, "seguidos", "following", "seguidos", 0.13),
+            ):
+                if not activo:
+                    continue
+                progreso(fraccion, f"Leyendo {texto}...")
+                anteriores = n.cargar_datos_guardados(usuario) or {}
+                previos = {
+                    u["id_usuario"]: u
+                    for u in (anteriores.get("redes") or {}).get(clave, [])
+                    if u.get("id_usuario")
+                }
+                try:
+                    redes[clave] = sitio.seguidores(
+                        datos["perfil"].get("id_usuario", ""),
+                        opciones.limite_usuarios,
+                        tipo,
+                        con_stats=opciones.stats_redes,
+                        limite_stats=opciones.limite_stats,
+                        metodo=opciones.metodo_stats,
+                        perfil=datos["perfil"]["usuario"],
+                        previos=previos,
+                        al_avanzar=lambda m, f=fraccion: progreso(f, m),
+                    )
+                    declarados = datos["perfil"].get(clave) or 0
+                    obtenidos = len(redes[clave])
+                    if declarados and not opciones.limite_usuarios and obtenidos < 0.95 * declarados:
+                        datos["avisos"].append(
+                            f"Lista de {texto} incompleta: {obtenidos} de {declarados} "
+                            "(Instagram suele cortar listas largas)."
+                        )
+                    if not redes[clave] and declarados > 0:
+                        datos["avisos"].append(
+                            f"El perfil declara {declarados} {texto} pero Instagram "
+                            "devolvió la lista vacía: restricción temporal probable."
+                        )
+                except Exception as error:  # noqa: BLE001 - se registra y se sigue con lo demás
+                    datos["avisos"].append(f"No se pudieron leer los {texto}: {error}")
+                datos["avisos"].extend(sitio.avisos_red)
+                sitio.avisos_red.clear()
+                sitio.pausa(8, 15)
+
+            datos["redes"] = redes
+            datos["benford"] = n.calcular_benford_redes(redes)
+
+            # Volver al perfil tras navegar a followers/following
+            try:
+                sitio.pagina.goto(f"{INSTAGRAM}/{usuario}/", wait_until="domcontentloaded", timeout=45_000)
+                sitio.pagina.wait_for_timeout(random.uniform(2000, 3500))
+            except Exception as error:
+                datos["avisos"].append(f"No se pudo volver al perfil tras redes: {error}")
+
+        # --- Desplazamiento para cargar más publicaciones ---
         rondas, vacias = 0, 0
         max_rondas = max(20, limite // 2 + 5)
         while len(encontradas) < limite and rondas < max_rondas and vacias < 2:
-            progreso(0.05 + 0.15 * rondas / max_rondas, f"Cargando publicaciones ({len(encontradas)} encontradas)...")
+            progreso(0.20 + 0.15 * rondas / max_rondas, f"Cargando publicaciones ({len(encontradas)} encontradas)...")
             antes = len(encontradas)
             mas = sitio.cargar_mas()
             enlaces += mas.get("enlaces", [])
@@ -605,9 +992,8 @@ def extraer(sitio, usuario: str, opciones: n.Opciones, carpeta: Path, progreso) 
             vacias = vacias + 1 if len(encontradas) == antes else 0
 
         if os.environ.get("DEBUG") == "1":
-            total_payloads = len(captura.get("payloads", []))
             print(
-                f"[extraer] payloads={total_payloads} "
+                f"[extraer] payloads={len(captura.get('payloads', []))} "
                 f"posts_reales={len(encontradas)} "
                 f"enlaces={len(enlaces)} "
                 f"a_descargar={min(len(encontradas), limite)}"
@@ -631,10 +1017,9 @@ def extraer(sitio, usuario: str, opciones: n.Opciones, carpeta: Path, progreso) 
 
         fallos_seguidos = 0
         for numero, pub in enumerate(pubs, start=1):
-            progreso(0.2 + 0.78 * (numero - 1) / len(pubs), f"Publicación {numero} de {len(pubs)}...")
+            progreso(0.35 + 0.64 * (numero - 1) / len(pubs), f"Publicación {numero} de {len(pubs)}...")
             pub["numero_post"] = numero
             medios = pub.pop("_medios", [])
-            # Limpiar metadatos internos del JSON final:
             pub.pop("_propietario_usuario", None)
             pub.pop("_propietario_id", None)
             try:
@@ -668,12 +1053,13 @@ def extraer(sitio, usuario: str, opciones: n.Opciones, carpeta: Path, progreso) 
         datos["estado"] = "completo"
 
     except RuntimeError as error:
-        if not datos["publicaciones"]:
-            raise  # error fatal sin nada que guardar: se informa a la interfaz
+        # Si ya hay publicaciones o listas de seguidores/seguidos, se conserva lo obtenido.
+        if not datos["publicaciones"] and not datos.get("redes"):
+            raise
         datos["estado"] = "incompleto"
         datos["avisos"].append(str(error))
     finally:
-        if datos["publicaciones"]:
+        if datos["publicaciones"] or datos.get("redes"):
             datos["metricas"] = n.calcular_metricas(datos["perfil"], datos["publicaciones"])
             n.guardar_datos(carpeta, datos)
 
@@ -689,7 +1075,7 @@ def _lanzar_navegador(p):
         opciones["executable_path"] = ruta
     try:
         return p.chromium.launch(**opciones)
-    except Exception as error:  # noqa: BLE001
+    except Exception as error:
         if "Executable doesn't exist" in str(error) or "playwright install" in str(error):
             raise RuntimeError(
                 "Playwright no tiene un navegador instalado. Ejecuta `playwright install chromium` "
@@ -712,8 +1098,13 @@ def ejecutar_extraccion(usuario: str, cuenta: str, opciones: n.Opciones, progres
 
     try:
         from playwright.sync_api import sync_playwright
-    except ImportError:
-        raise RuntimeError("Falta instalar Playwright: pip install playwright && playwright install chromium")
+    except ImportError as error:
+        import sys
+        raise RuntimeError(
+            f"Falta el paquete 'playwright' en el intérprete activo ({sys.executable}).\n"
+            f"Instálalo con: {sys.executable} -m pip install playwright\n"
+            f"y el binario con: {sys.executable} -m playwright install chromium"
+        ) from error
 
     with sync_playwright() as p:
         navegador = _lanzar_navegador(p)
