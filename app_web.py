@@ -1,15 +1,10 @@
-"""
-Interfaz web ligera (Flask). No necesita pandas, pyarrow ni Streamlit, por lo que
-se instala sin problemas en cualquier Mac (incluidos los de procesador Intel).
 
-Ejecutar:   python app_web.py        y abrir  http://127.0.0.1:8000
-"""
 import os
 import threading
 import webbrowser
 
 from flask import (
-    Flask, abort, jsonify, redirect, render_template, request,
+    Flask, Response, abort, jsonify, redirect, render_template, request, send_file,
     send_from_directory, url_for,
 )
 
@@ -23,6 +18,13 @@ ETIQUETAS_RASGOS = {
     "extraversion": "Extraversión",
     "amabilidad": "Amabilidad",
     "neuroticismo": "Neuroticismo",
+}
+
+# Opciones del selector de la página de Benford
+LISTAS = {"seguidores": "Mis seguidores", "seguidos": "Mis seguidos"}
+METRICAS = {
+    "seguidores": "Nº de seguidores de cada uno",
+    "seguidos": "Nº de seguidos de cada uno",
 }
 
 CERROJO = threading.Lock()
@@ -77,6 +79,7 @@ def index():
         sesion=n.sesion_existe(cuenta),
         api_ok=n.api_key_configurada(),
         modelo=n.modelo_configurado(),
+        motor=n.motor_actual(), 
         guardados=n.listar_usuarios_guardados(),
     )
 
@@ -105,11 +108,24 @@ def extraer():
             videos=request.form.get("videos") == "on",
             comentarios=request.form.get("comentarios") == "on",
             limite_comentarios=int(request.form.get("limite_comentarios", 20)),
+            seguidores=request.form.get("seguidores") == "on",
+            seguidos=request.form.get("seguidos") == "on",
+            limite_usuarios=int(request.form.get("limite_usuarios") or 0),   # 0 = lista completa
+            stats_redes=request.form.get("stats_redes") == "on",
+            limite_stats=int(request.form.get("limite_stats") or 0),         # 0 = todos
+            metodo_stats=request.form.get("metodo_stats", "api"),            # "api" | "hover"
         )
     except ValueError as error:
         return jsonify(ok=False, error=str(error)), 400
 
-    cuenta = request.form.get("cuenta", "").strip()
+    cuenta = request.form.get("cuenta", "").strip() or os.environ.get("IG_CUENTA", "").strip()
+
+    if not cuenta:
+        return jsonify(
+            ok=False,
+            error="No hay cuenta alternativa configurada (revisa IG_CUENTA en .env o el campo del formulario).",
+        ), 400
+
     with CERROJO:
         ESTADO.clear()
         ESTADO.update(ESTADO_INICIAL)
@@ -159,8 +175,10 @@ def ver_usuario(usuario):
         con_comentarios=[p for p in publicaciones if p.get("comentarios_lista")],
         analisis=n.cargar_analisis_guardado(usuario),
         rasgos=n.RASGOS,
-        etiquetas=ETIQUETAS_RASGOS,
+        etiquetas=n.ETIQUETAS_RASGOS,
         api_ok=n.api_key_configurada(),
+        config_analizar_imagenes=os.environ.get("ANALIZAR_IMAGENES", "0") == "1",
+        config_max_imagenes=os.environ.get("MAX_IMAGENES_ANALISIS", "5"),
     )
 
 
@@ -184,6 +202,46 @@ def analizar(usuario):
     except (ValueError, RuntimeError) as error:
         return redirect(url_for("ver_usuario", usuario=usuario, msg=str(error), tipo="error") + "#bigfive")
 
+
+# ------------------------------------- Ley de Benford -------------------------------------
+# ------------------------------------- Ley de Benford -------------------------------------
+def _seleccion_benford(usuario: str):
+    """Lee la lista y la cifra elegidas (query string) y calcula el análisis."""
+    datos = _cargar(usuario)
+    lista = request.args.get("lista", "seguidores")
+    metrica = request.args.get("metrica", "seguidores")
+    if lista not in LISTAS or metrica not in METRICAS:
+        abort(400)
+    usuarios = (datos.get("redes") or {}).get(lista) or []
+    return lista, metrica, usuarios, n.analizar_lista(usuarios, metrica, lista)
+
+
+@app.route("/u/<usuario>/benford")
+def benford(usuario):
+    lista, metrica, _, analisis = _seleccion_benford(usuario)
+    return render_template(
+        "benford.html", usuario=usuario, lista=lista, metrica=metrica,
+        analisis=analisis, listas=LISTAS, metricas=METRICAS,
+    )
+
+
+@app.route("/u/<usuario>/benford.png")
+def benford_png(usuario):
+    lista, metrica, _, analisis = _seleccion_benford(usuario)
+    if not analisis["n"]:
+        abort(404)
+    titulo = f"@{usuario} · {LISTAS[lista]} · {METRICAS[metrica]}"
+    return Response(n.grafico_benford_png(analisis, titulo), mimetype="image/png")
+
+
+@app.route("/u/<usuario>/benford.xlsx")
+def benford_excel(usuario):
+    lista, metrica, usuarios, analisis = _seleccion_benford(usuario)
+    if not analisis["n"]:
+        abort(404)
+    ruta = n.carpeta_usuario(usuario) / f"benford_{lista}_{metrica}.xlsx"
+    n.exportar_excel(usuario, lista, metrica, usuarios, analisis, ruta)
+    return send_file(ruta, as_attachment=True, download_name=ruta.name)
 
 if __name__ == "__main__":
     puerto = int(os.environ.get("PUERTO", "8000"))
